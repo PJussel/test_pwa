@@ -1,48 +1,33 @@
-import './style.css'
-
-interface Activity {
-  id: string;
-  type: string;
-  date: string;
-}
+import './style.css';
+import type { Activity } from './types/Activity';
+import { DatabaseService } from './services/DatabaseService';
+import { UIService } from './services/UIService';
 
 class FitnessTracker {
   private currentDate: Date = new Date();
-  private db: IDBDatabase | null = null;
+  private readonly db: DatabaseService;
+  private readonly ui: UIService;
 
   constructor() {
-    this.initializeDB();
-    this.setupEventListeners();
-    this.updateDateDisplay();
+    this.db = new DatabaseService();
+    this.ui = new UIService(
+      (id) => this.deleteActivity(id),
+      (type) => this.handleActivityClick(type)
+    );
+
+    this.initialize();
   }
 
-  private initializeDB() {
-    const request = indexedDB.open('FitnessTrackerDB', 1);
-
-    request.onerror = () => {
-      console.error('Error opening database');
-    };
-
-    request.onsuccess = (event) => {
-      this.db = (event.target as IDBOpenDBRequest).result;
-      this.loadActivities();
-    };
-
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      const store = db.createObjectStore('activities', { keyPath: 'id' });
-      store.createIndex('date', 'date', { unique: false });
-    };
+  private async initialize() {
+    await this.db.init();
+    this.setupEventListeners();
+    this.updateDateDisplay();
+    this.loadActivities();
   }
 
   private setupEventListeners() {
-    document.getElementById('prev-day')?.addEventListener('click', () => this.changeDate(-1));
-    document.getElementById('next-day')?.addEventListener('click', () => this.changeDate(1));
-
-    const buttons = document.querySelectorAll('.activity-btn');
-    buttons.forEach(button => {
-      button.addEventListener('click', (e) => this.handleActivityClick(e));
-    });
+    this.ui.on('prevDay', () => this.changeDate(-1));
+    this.ui.on('nextDay', () => this.changeDate(1));
   }
 
   private changeDate(days: number) {
@@ -52,98 +37,29 @@ class FitnessTracker {
   }
 
   private updateDateDisplay() {
-    const dateElem = document.getElementById('current-date');
-    if (dateElem) {
-      dateElem.textContent = this.currentDate.toLocaleDateString('de-DE', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      });
-    }
+    this.ui.updateDateDisplay(this.currentDate);
   }
 
-  private handleActivityClick(event: Event) {
-    const button = event.currentTarget as HTMLButtonElement;
-    const activity = button.dataset.activity;
-    
-    if (activity) {
-      this.saveActivity({
-        id: crypto.randomUUID(),
-        type: activity,
-        date: this.currentDate.toISOString().split('T')[0]
-      });
-    }
-  }
-
-  private saveActivity(activity: Activity) {
-    if (!this.db) return;
-
-    const transaction = this.db.transaction(['activities'], 'readwrite');
-    const store = transaction.objectStore('activities');
-    
-    store.add(activity);
-    transaction.oncomplete = () => {
-      this.loadActivities();
+  private async handleActivityClick(activityType: string) {
+    const activity: Activity = {
+      id: crypto.randomUUID(),
+      type: activityType,
+      date: this.currentDate.toISOString().split('T')[0]
     };
+    
+    await this.db.saveActivity(activity);
+    this.loadActivities();
   }
 
-  private deleteActivity(id: string) {
-    if (!this.db) return;
-
-    const transaction = this.db.transaction(['activities'], 'readwrite');
-    const store = transaction.objectStore('activities');
-    
-    store.delete(id);
-    transaction.oncomplete = () => {
-      this.loadActivities();
-    };
+  private async deleteActivity(id: string) {
+    await this.db.deleteActivity(id);
+    this.loadActivities();
   }
 
-  private loadActivities() {
-    if (!this.db) return;
-
-    const transaction = this.db.transaction(['activities'], 'readonly');
-    const store = transaction.objectStore('activities');
-    const dateIndex = store.index('date');
-    
+  private async loadActivities() {
     const dateString = this.currentDate.toISOString().split('T')[0];
-    const request = dateIndex.getAll(dateString);
-
-    request.onsuccess = () => {
-      this.displayActivities(request.result);
-    };
-  }
-
-  private readonly activityEmojis: { [key: string]: string } = {
-    biking: '🚲',
-    mountainbiking: '🚵',
-    hiking: '🏃‍♂️',
-    fitness: '💪',
-    skating: '⛸️',
-    hockey: '🏒',
-    walking: '🚶‍♂️'
-  };
-
-  private displayActivities(activities: Activity[]) {
-    const listElement = document.getElementById('activities-list');
-    if (!listElement) return;
-
-    listElement.innerHTML = activities.map(activity => `
-      <div class="activity-item">
-        <span>${this.activityEmojis[activity.type] || ''} ${activity.type}</span>
-        <button class="delete-btn" data-id="${activity.id}">❌</button>
-      </div>
-    `).join('');
-
-    // Event-Listener für Delete-Buttons
-    listElement.querySelectorAll('.delete-btn').forEach(button => {
-      button.addEventListener('click', (e) => {
-        const btn = e.currentTarget as HTMLButtonElement;
-        const id = btn.dataset.id;
-        if (id) this.deleteActivity(id);
-      });
-    });
+    const activities = await this.db.getActivitiesByDate(dateString);
+    this.ui.displayActivities(activities);
   }
 }
 
